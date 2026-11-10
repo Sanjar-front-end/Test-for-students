@@ -31,8 +31,8 @@ export function AdminView({ onLogout }: AdminViewProps) {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [notification, setNotification] = useState<string | null>(null);
 
-  const fetchSubmissions = async () => {
-    setIsLoading(true);
+  const fetchSubmissions = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const res = await fetch('/api/admin', {
         headers: {
@@ -47,12 +47,17 @@ export function AdminView({ onLogout }: AdminViewProps) {
     } catch (err) {
       console.error('Failed to fetch admin submissions:', err);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
   useEffect(() => {
     fetchSubmissions();
+    // Auto-update table every 5 seconds so new student submissions appear live
+    const interval = setInterval(() => {
+      fetchSubmissions(true);
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const showNotice = (msg: string) => {
@@ -180,8 +185,14 @@ export function AdminView({ onLogout }: AdminViewProps) {
             <Users className="w-6 h-6" />
           </div>
           <div>
-            <div className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-950 text-indigo-300 border border-indigo-700/50 mb-1">
-              Әкімшілік панелі (ADMIN)
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-950 text-indigo-300 border border-indigo-700/50">
+                Әкімшілік панелі (ADMIN)
+              </span>
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Тікелей эфир
+              </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
               Оқушылар нәтижелерінің кестесі
@@ -196,7 +207,7 @@ export function AdminView({ onLogout }: AdminViewProps) {
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             type="button"
-            onClick={fetchSubmissions}
+            onClick={() => fetchSubmissions(false)}
             disabled={isLoading}
             className="p-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white cursor-pointer transition-all"
             title="Жаңарту"
