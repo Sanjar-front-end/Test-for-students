@@ -40,13 +40,18 @@ export async function GET() {
 
   return NextResponse.json({
     status: 'ok',
+    environment: process.env.VERCEL_ENV || 'unknown',
+    projectName: process.env.VERCEL_PROJECT_NAME || 'unknown',
     database: {
-      type: dbUrl ? 'Neon / Postgres' : 'None (Ephemeral Local Storage)',
+      type: dbUrl ? 'Neon / Postgres' : 'None (DATABASE_URL missing in this deployment)',
       status: dbStatus,
       submissionsCount: count,
       error: dbError,
     },
     detectedEnvKeys: envKeys,
     isVercel: !!process.env.VERCEL,
+    tip: !dbUrl
+      ? 'DATABASE_URL is not attached to this deployment. Connect your Neon DB to this project in Vercel Storage tab and click Redeploy.'
+      : 'Database connected successfully!',
   });
 }
