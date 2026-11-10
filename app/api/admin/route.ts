@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllSubmissions, deleteSubmission, resetAllSubmissions } from '@/lib/db.server';
+import { getAllSubmissions, deleteSubmission, resetAllSubmissions, getDatabaseType } from '@/lib/db.server';
 
 function checkAdminAuth(request: NextRequest): boolean {
   const adminName = request.headers.get('x-admin-name')?.trim().toUpperCase();
@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
+    databaseType: getDatabaseType(),
     submissions,
     stats: {
       total,

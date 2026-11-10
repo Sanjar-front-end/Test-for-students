@@ -9,20 +9,25 @@ const DB_FILE = path.join(DATA_DIR, 'submissions.json');
 const TMP_FILE = path.join(os.tmpdir(), 'biology_submissions.json');
 const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
-// In-memory cache
 let memoryCache: SubmissionRecord[] = [];
 let neonTableInitialized = false;
 
-// 1. Neon / Postgres connection string (Auto-provided by Vercel when selecting Neon or Postgres)
+// Neon / Postgres connection string (Auto-provided by Vercel when selecting Neon or Postgres)
 const POSTGRES_URL =
   process.env.DATABASE_URL ||
   process.env.POSTGRES_URL ||
   process.env.POSTGRES_PRISMA_URL ||
   process.env.POSTGRES_URL_NON_POOLING;
 
-// 2. Upstash Redis connection (Auto-provided by Vercel when selecting Upstash)
+// Upstash Redis connection
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+
+export function getDatabaseType(): string {
+  if (POSTGRES_URL) return 'Neon Postgres';
+  if (UPSTASH_URL && UPSTASH_TOKEN) return 'Upstash Redis';
+  return 'Local (Бұлттық база қосылмаған)';
+}
 
 function getNeonSql() {
   if (!POSTGRES_URL) return null;
@@ -49,7 +54,7 @@ async function ensureNeonTable(sql: any) {
         time_spent_formatted VARCHAR(100) NOT NULL,
         submitted_at BIGINT NOT NULL,
         created_at BIGINT NOT NULL,
-        answers JSONB DEFAULT '{}'::jsonb
+        answers TEXT DEFAULT '{}'
       )
     `;
     neonTableInitialized = true;
@@ -78,12 +83,12 @@ function getLocalDbFilePath(): string {
 }
 
 /**
- * Fetch all submissions (Neon -> Upstash -> Local File)
+ * Fetch all submissions
  */
 export async function getAllSubmissions(): Promise<SubmissionRecord[]> {
   const now = Date.now();
 
-  // --- OPTION A: Neon / Postgres (Vercel Database) ---
+  // 1. Neon / Postgres
   const sql = getNeonSql();
   if (sql) {
     try {
@@ -93,19 +98,26 @@ export async function getAllSubmissions(): Promise<SubmissionRecord[]> {
         ORDER BY submitted_at DESC
       `;
       const records: SubmissionRecord[] = rows
-        .map((r: any) => ({
-          id: r.id,
-          firstName: r.first_name,
-          lastName: r.last_name,
-          score: Number(r.score),
-          total: Number(r.total),
-          percentage: Number(r.percentage),
-          timeSpentSeconds: Number(r.time_spent_seconds),
-          timeSpentFormatted: r.time_spent_formatted,
-          submittedAt: Number(r.submitted_at),
-          createdAt: Number(r.created_at),
-          answers: typeof r.answers === 'string' ? JSON.parse(r.answers) : r.answers || {},
-        }))
+        .map((r: any) => {
+          let parsedAnswers = {};
+          try {
+            parsedAnswers = typeof r.answers === 'string' ? JSON.parse(r.answers) : r.answers || {};
+          } catch {}
+
+          return {
+            id: r.id,
+            firstName: r.first_name,
+            lastName: r.last_name,
+            score: Number(r.score),
+            total: Number(r.total),
+            percentage: Number(r.percentage),
+            timeSpentSeconds: Number(r.time_spent_seconds),
+            timeSpentFormatted: r.time_spent_formatted,
+            submittedAt: Number(r.submitted_at),
+            createdAt: Number(r.created_at),
+            answers: parsedAnswers,
+          };
+        })
         .filter((r) => now - (r.createdAt || r.submittedAt) < ONE_MONTH_MS);
 
       memoryCache = records;
@@ -115,7 +127,7 @@ export async function getAllSubmissions(): Promise<SubmissionRecord[]> {
     }
   }
 
-  // --- OPTION B: Upstash Redis (Vercel Database) ---
+  // 2. Upstash Redis
   if (UPSTASH_URL && UPSTASH_TOKEN) {
     try {
       const res = await fetch(`${UPSTASH_URL}/hgetall/submissions`, {
@@ -147,7 +159,7 @@ export async function getAllSubmissions(): Promise<SubmissionRecord[]> {
     }
   }
 
-  // --- OPTION C: Local Filesystem Fallback ---
+  // 3. Fallback to local file / memory
   const file = getLocalDbFilePath();
   try {
     let items: SubmissionRecord[] = [];
@@ -170,10 +182,9 @@ export async function getAllSubmissions(): Promise<SubmissionRecord[]> {
 }
 
 /**
- * Save a submission (Neon -> Upstash -> Local File)
+ * Save submission
  */
 export async function saveSubmission(record: SubmissionRecord): Promise<void> {
-  // --- OPTION A: Neon / Postgres (Vercel Database) ---
   const sql = getNeonSql();
   if (sql) {
     try {
@@ -181,7 +192,6 @@ export async function saveSubmission(record: SubmissionRecord): Promise<void> {
       const normalizedFirst = record.firstName.trim();
       const normalizedLast = record.lastName.trim();
 
-      // Check if student already has a record to update their attempt
       const existing = await sql`
         SELECT id FROM student_submissions 
         WHERE LOWER(TRIM(first_name)) = LOWER(${normalizedFirst}) 
@@ -199,7 +209,7 @@ export async function saveSubmission(record: SubmissionRecord): Promise<void> {
         ) VALUES (
           ${targetId}, ${record.firstName}, ${record.lastName}, ${record.score}, ${record.total}, 
           ${record.percentage}, ${record.timeSpentSeconds}, ${record.timeSpentFormatted}, 
-          ${record.submittedAt}, ${record.createdAt}, ${answersJson}::jsonb
+          ${record.submittedAt}, ${record.createdAt}, ${answersJson}
         )
         ON CONFLICT (id) DO UPDATE SET
           first_name = EXCLUDED.first_name,
@@ -214,11 +224,11 @@ export async function saveSubmission(record: SubmissionRecord): Promise<void> {
       `;
       return;
     } catch (err) {
-      console.error('Error saving to Neon database:', err);
+      console.error('CRITICAL: Error saving to Neon database:', err);
     }
   }
 
-  // --- OPTION B: Upstash Redis (Vercel Database) ---
+  // Upstash fallback
   if (UPSTASH_URL && UPSTASH_TOKEN) {
     try {
       const payload = JSON.stringify(record);
@@ -236,7 +246,7 @@ export async function saveSubmission(record: SubmissionRecord): Promise<void> {
     }
   }
 
-  // --- OPTION C: Local Filesystem Fallback ---
+  // Local fallback
   const file = getLocalDbFilePath();
   try {
     const existing = await getAllSubmissions();
@@ -268,7 +278,7 @@ export async function saveSubmission(record: SubmissionRecord): Promise<void> {
 }
 
 /**
- * Delete a submission (Neon -> Upstash -> Local File)
+ * Delete submission
  */
 export async function deleteSubmission(id: string): Promise<boolean> {
   const sql = getNeonSql();
@@ -282,17 +292,6 @@ export async function deleteSubmission(id: string): Promise<boolean> {
     }
   }
 
-  if (UPSTASH_URL && UPSTASH_TOKEN) {
-    try {
-      await fetch(`${UPSTASH_URL}/hdel/submissions/${encodeURIComponent(id)}`, {
-        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
-      });
-      return true;
-    } catch (err) {
-      console.error('Error deleting from Upstash:', err);
-    }
-  }
-
   const file = getLocalDbFilePath();
   try {
     const existing = await getAllSubmissions();
@@ -300,13 +299,13 @@ export async function deleteSubmission(id: string): Promise<boolean> {
     memoryCache = filtered;
     fs.writeFileSync(file, JSON.stringify(filtered, null, 2), 'utf-8');
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }
 
 /**
- * Reset all submissions (Neon -> Upstash -> Local File)
+ * Reset all submissions
  */
 export async function resetAllSubmissions(): Promise<boolean> {
   const sql = getNeonSql();
@@ -317,17 +316,6 @@ export async function resetAllSubmissions(): Promise<boolean> {
       return true;
     } catch (err) {
       console.error('Error resetting Neon table:', err);
-    }
-  }
-
-  if (UPSTASH_URL && UPSTASH_TOKEN) {
-    try {
-      await fetch(`${UPSTASH_URL}/del/submissions`, {
-        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
-      });
-      return true;
-    } catch (err) {
-      console.error('Error resetting Upstash:', err);
     }
   }
 

@@ -30,6 +30,7 @@ export function AdminView({ onLogout }: AdminViewProps) {
   const [sortBy, setSortBy] = useState<'date' | 'score' | 'name'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [notification, setNotification] = useState<string | null>(null);
+  const [databaseType, setDatabaseType] = useState<string>('');
 
   const fetchSubmissions = async (silent = false) => {
     if (!silent) setIsLoading(true);
@@ -41,6 +42,9 @@ export function AdminView({ onLogout }: AdminViewProps) {
         },
       });
       const data = await res.json();
+      if (data.databaseType) {
+        setDatabaseType(data.databaseType);
+      }
       if (data.success && Array.isArray(data.submissions)) {
         setSubmissions(data.submissions);
       }
@@ -193,6 +197,17 @@ export function AdminView({ onLogout }: AdminViewProps) {
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 Тікелей эфир
               </span>
+              {databaseType && (
+                <span
+                  className={`hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${
+                    databaseType.includes('Neon') || databaseType.includes('Upstash')
+                      ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40'
+                      : 'bg-amber-950/60 text-amber-300 border-amber-500/40'
+                  }`}
+                >
+                  Дерекқор: {databaseType}
+                </span>
+              )}
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
               Оқушылар нәтижелерінің кестесі
