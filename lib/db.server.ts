@@ -8,7 +8,15 @@ const DB_FILE = path.join(DATA_DIR, 'submissions.json');
 const TMP_FILE = path.join(os.tmpdir(), 'biology_submissions.json');
 const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
+// In-memory cache
 let memoryCache: SubmissionRecord[] = [];
+
+// Upstash / Vercel KV credentials
+const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+// Firebase Database URL (optional zero-config cloud DB)
+const FIREBASE_URL = process.env.FIREBASE_DATABASE_URL;
 
 function getDbFilePath(): string {
   try {
@@ -20,7 +28,6 @@ function getDbFilePath(): string {
     }
     return DB_FILE;
   } catch {
-    // Fallback to /tmp for Vercel/serverless environments
     try {
       if (!fs.existsSync(TMP_FILE)) {
         fs.writeFileSync(TMP_FILE, JSON.stringify([], null, 2), 'utf-8');
@@ -32,7 +39,62 @@ function getDbFilePath(): string {
   }
 }
 
-export function getAllSubmissions(): SubmissionRecord[] {
+/**
+ * Fetch all submissions from Cloud DB or local file
+ */
+export async function getAllSubmissions(): Promise<SubmissionRecord[]> {
+  const now = Date.now();
+
+  // 1. Try Upstash / Vercel KV if configured
+  if (KV_URL && KV_TOKEN) {
+    try {
+      const res = await fetch(`${KV_URL}/hgetall/submissions`, {
+        headers: { Authorization: `Bearer ${KV_TOKEN}` },
+        cache: 'no-store',
+      });
+      const data = await res.json();
+      if (data && data.result) {
+        // Upstash hgetall returns key-value pairs
+        const list: SubmissionRecord[] = [];
+        const result = data.result;
+        if (Array.isArray(result)) {
+          for (let i = 0; i < result.length; i += 2) {
+            try {
+              list.push(JSON.parse(result[i + 1]));
+            } catch {}
+          }
+        } else if (typeof result === 'object') {
+          for (const key of Object.keys(result)) {
+            try {
+              list.push(JSON.parse(result[key]));
+            } catch {}
+          }
+        }
+        const valid = list.filter((item) => now - (item.createdAt || item.submittedAt) < ONE_MONTH_MS);
+        return valid.sort((a, b) => b.submittedAt - a.submittedAt);
+      }
+    } catch (err) {
+      console.error('Error reading from Upstash KV:', err);
+    }
+  }
+
+  // 2. Try Firebase Realtime Database if configured
+  if (FIREBASE_URL) {
+    try {
+      const cleanUrl = FIREBASE_URL.replace(/\/$/, '');
+      const res = await fetch(`${cleanUrl}/submissions.json`, { cache: 'no-store' });
+      const data = await res.json();
+      if (data && typeof data === 'object') {
+        const list: SubmissionRecord[] = Object.values(data);
+        const valid = list.filter((item) => now - (item.createdAt || item.submittedAt) < ONE_MONTH_MS);
+        return valid.sort((a, b) => b.submittedAt - a.submittedAt);
+      }
+    } catch (err) {
+      console.error('Error reading from Firebase:', err);
+    }
+  }
+
+  // 3. Fallback to local server filesystem
   const file = getDbFilePath();
   try {
     let items: SubmissionRecord[] = [];
@@ -43,8 +105,6 @@ export function getAllSubmissions(): SubmissionRecord[] {
       items = memoryCache;
     }
 
-    const now = Date.now();
-    // Filter out items older than 30 days
     const validItems = items.filter(
       (item) => now - (item.createdAt || item.submittedAt) < ONE_MONTH_MS
     );
@@ -52,15 +112,52 @@ export function getAllSubmissions(): SubmissionRecord[] {
     memoryCache = validItems;
     return validItems.sort((a, b) => b.submittedAt - a.submittedAt);
   } catch (err) {
-    console.error('Error reading submissions DB:', err);
+    console.error('Error reading local submissions DB:', err);
     return memoryCache;
   }
 }
 
-export function saveSubmission(record: SubmissionRecord): void {
+/**
+ * Save a submission to Cloud DB or local file
+ */
+export async function saveSubmission(record: SubmissionRecord): Promise<void> {
+  // 1. Try Upstash / Vercel KV
+  if (KV_URL && KV_TOKEN) {
+    try {
+      const payload = JSON.stringify(record);
+      await fetch(`${KV_URL}/hset/submissions/${encodeURIComponent(record.id)}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${KV_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify([payload]),
+      });
+      return;
+    } catch (err) {
+      console.error('Error saving to Upstash KV:', err);
+    }
+  }
+
+  // 2. Try Firebase Realtime Database
+  if (FIREBASE_URL) {
+    try {
+      const cleanUrl = FIREBASE_URL.replace(/\/$/, '');
+      await fetch(`${cleanUrl}/submissions/${encodeURIComponent(record.id)}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+      return;
+    } catch (err) {
+      console.error('Error saving to Firebase:', err);
+    }
+  }
+
+  // 3. Fallback to local server filesystem
   const file = getDbFilePath();
   try {
-    const existing = getAllSubmissions();
+    const existing = await getAllSubmissions();
     const normalizedName = `${record.firstName.trim().toLowerCase()} ${record.lastName.trim().toLowerCase()}`;
     const idx = existing.findIndex(
       (item) =>
@@ -78,38 +175,89 @@ export function saveSubmission(record: SubmissionRecord): void {
 
     try {
       fs.writeFileSync(file, JSON.stringify(existing, null, 2), 'utf-8');
-    } catch (writeErr) {
-      // If primary file failed, try tmp
+    } catch {
       if (file !== TMP_FILE) {
         fs.writeFileSync(TMP_FILE, JSON.stringify(existing, null, 2), 'utf-8');
       }
     }
   } catch (err) {
-    console.error('Error saving submission:', err);
+    console.error('Error saving submission locally:', err);
   }
 }
 
-export function deleteSubmission(id: string): boolean {
+/**
+ * Delete a single submission
+ */
+export async function deleteSubmission(id: string): Promise<boolean> {
+  if (KV_URL && KV_TOKEN) {
+    try {
+      await fetch(`${KV_URL}/hdel/submissions/${encodeURIComponent(id)}`, {
+        headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      });
+      return true;
+    } catch (err) {
+      console.error('Error deleting from Upstash KV:', err);
+    }
+  }
+
+  if (FIREBASE_URL) {
+    try {
+      const cleanUrl = FIREBASE_URL.replace(/\/$/, '');
+      await fetch(`${cleanUrl}/submissions/${encodeURIComponent(id)}.json`, {
+        method: 'DELETE',
+      });
+      return true;
+    } catch (err) {
+      console.error('Error deleting from Firebase:', err);
+    }
+  }
+
   const file = getDbFilePath();
   try {
-    const existing = getAllSubmissions();
+    const existing = await getAllSubmissions();
     const filtered = existing.filter((item) => item.id !== id);
     memoryCache = filtered;
     fs.writeFileSync(file, JSON.stringify(filtered, null, 2), 'utf-8');
     return true;
   } catch (err) {
-    console.error('Error deleting submission:', err);
+    console.error('Error deleting submission locally:', err);
     return false;
   }
 }
 
-export function resetAllSubmissions(): boolean {
+/**
+ * Reset all submissions
+ */
+export async function resetAllSubmissions(): Promise<boolean> {
+  if (KV_URL && KV_TOKEN) {
+    try {
+      await fetch(`${KV_URL}/del/submissions`, {
+        headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      });
+      return true;
+    } catch (err) {
+      console.error('Error resetting Upstash KV:', err);
+    }
+  }
+
+  if (FIREBASE_URL) {
+    try {
+      const cleanUrl = FIREBASE_URL.replace(/\/$/, '');
+      await fetch(`${cleanUrl}/submissions.json`, {
+        method: 'DELETE',
+      });
+      return true;
+    } catch (err) {
+      console.error('Error resetting Firebase:', err);
+    }
+  }
+
   const file = getDbFilePath();
   try {
     memoryCache = [];
     fs.writeFileSync(file, JSON.stringify([], null, 2), 'utf-8');
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }

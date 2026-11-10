@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const submissions = getAllSubmissions();
+  const submissions = await getAllSubmissions();
 
   const total = submissions.length;
   let avgPercentage = 0;
@@ -54,12 +54,12 @@ export async function DELETE(request: NextRequest) {
   const action = searchParams.get('action');
 
   if (action === 'clear-all') {
-    resetAllSubmissions();
+    await resetAllSubmissions();
     return NextResponse.json({ success: true, message: 'Барлық нәтижелер тазартылды' });
   }
 
   if (id) {
-    deleteSubmission(id);
+    await deleteSubmission(id);
     return NextResponse.json({ success: true, message: 'Оқушы жазбасы өшірілді' });
   }
 

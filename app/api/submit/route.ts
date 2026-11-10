@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       answers: answers || {},
     };
 
-    saveSubmission(record);
+    await saveSubmission(record);
 
     return NextResponse.json({
       success: true,
