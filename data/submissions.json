@@ -1,0 +1,32 @@
+[
+  {
+    "id": "1794314857921_xj5p4h",
+    "firstName": "TESTER",
+    "lastName": "TESTER",
+    "score": 2,
+    "total": 25,
+    "percentage": 8,
+    "timeSpentSeconds": 17,
+    "timeSpentFormatted": "0 мин 17 сек",
+    "submittedAt": 1794314857921,
+    "createdAt": 1794314857921,
+    "answers": {
+      "1": "B",
+      "2": "C",
+      "3": "D",
+      "4": "D",
+      "5": "D",
+      "6": "D",
+      "7": "D",
+      "9": "D",
+      "12": "D",
+      "16": "D",
+      "17": "D",
+      "18": "D",
+      "19": "D",
+      "21": "D",
+      "22": "D",
+      "24": "D"
+    }
+  }
+]
